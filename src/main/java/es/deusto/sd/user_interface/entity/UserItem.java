@@ -4,6 +4,7 @@ public class UserItem {
     private static int ID_GEN = 1;
 
     private final int id;
+    private Integer serverId; // Server-assigned ID
     private final String name;
     private final String email;
     private final String password;
@@ -11,6 +12,7 @@ public class UserItem {
 
     public UserItem(String name, String email, String password, String phone) {
         this.id = ID_GEN++;
+        this.serverId = null;
         this.name = name;
         this.email = email;
         this.password = password;
@@ -18,6 +20,8 @@ public class UserItem {
     }
 
     public int getId() { return id; }
+    public Integer getServerId() { return serverId; }
+    public void setServerId(Integer serverId) { this.serverId = serverId; }
     public String getName() { return name; }
     public String getEmail() { return email; }
     public String getPassword() { return password; }

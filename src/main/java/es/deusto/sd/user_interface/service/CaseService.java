@@ -1,69 +1,105 @@
 package es.deusto.sd.user_interface.service;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.stream.Collectors;
 
+import es.deusto.sd.user_interface.dto.*;
 import es.deusto.sd.user_interface.entity.CaseItem;
+import es.deusto.sd.user_interface.gateway.AuthenticusGateway;
 
 public class CaseService {
-    private final List<CaseItem> cases = new ArrayList<>();
+    private final AuthenticusGateway gateway;
+    
+    private final List<CaseItem> cachedCases = new ArrayList<>();
 
-    public synchronized CaseItem createCase(String userEmail, String name, List<String> imagePaths, String analysisType, LocalDateTime createdAt) {
-        CaseItem c = new CaseItem(userEmail, name, imagePaths, analysisType, createdAt);
-        cases.add(c);
-        return c;
+    public CaseService(AuthenticusGateway gateway) {
+        this.gateway = gateway;
     }
 
-    public synchronized List<CaseItem> listCasesForUser(String userEmail) {
-        List<CaseItem> res = new ArrayList<>();
-        for (CaseItem c: cases) if (c.getUserEmail().equals(userEmail)) res.add(c);
-        return res;
-    }
-
-    public synchronized List<CaseItem> listLastCasesForUser(String userEmail, int n) {
-        if (n <= 0) return new ArrayList<>();
-        List<CaseItem> all = listCasesForUser(userEmail);
-        all.sort((a, b) -> b.getCreatedAt().compareTo(a.getCreatedAt())); // newest first
-        if (all.size() <= n) return all;
-        return new ArrayList<>(all.subList(0, n));
-    }
-
-    public synchronized List<CaseItem> listCasesForUserBetween(String userEmail, java.time.LocalDateTime start, java.time.LocalDateTime end) {
-        List<CaseItem> res = new ArrayList<>();
-        if (start == null || end == null) return res;
-        for (CaseItem c: cases) {
-            if (!c.getUserEmail().equals(userEmail)) continue;
-            java.time.LocalDateTime d = c.getCreatedAt();
-            if (d == null) continue;
-            if ((d.isEqual(start) || d.isAfter(start)) && (d.isEqual(end) || d.isBefore(end))) res.add(c);
+    public synchronized CaseItem createCase(String token, String userEmail, String name, 
+            List<String> imagePaths, String analysisType, LocalDateTime createdAt) {
+        
+        if (token == null || name == null || analysisType == null) return null;
+        
+        List<FileDTO> files = new ArrayList<>();
+        if (imagePaths != null) {
+            for (String path : imagePaths) {
+                files.add(new FileDTO(path));
+            }
         }
-        res.sort((a, b) -> b.getCreatedAt().compareTo(a.getCreatedAt())); // newest first
-        return res;
-    }
-
-    public synchronized void analyzeCase(CaseItem c) {
-        // Simulate analysis work
-        List<String> imgs = c.getImagePaths() == null ? new ArrayList<>() : c.getImagePaths();
-        for (String img : imgs) {
-            // score between 0 and 1
-            double score = Math.random();
-            c.setImageScore(img, score);
+        
+        CaseDTO caseDTO = new CaseDTO();
+        caseDTO.setName(name);
+        caseDTO.setAnalysisType(analysisType);
+        caseDTO.setDate(createdAt != null ? createdAt.toLocalDate() : LocalDate.now());
+        caseDTO.setFiles(files);
+        
+        CaseDTO result = gateway.createCase(caseDTO, token);
+        
+        if (result != null) {
+            CaseItem item = new CaseItem(userEmail, name, imagePaths, analysisType, createdAt);
+            item.setServerId(result.getId());
+            cachedCases.add(item);
+            return item;
         }
-        String r = "Analysis result for '" + c.getName() + "': type=" + c.getAnalysisType()
-            + ", images=" + imgs.size();
-        c.setResult(r);
+        return null;
     }
 
-    public synchronized boolean deleteCase(CaseItem c) {
-        if (c == null) return false;
-        return cases.removeIf(existing -> existing.getId() == c.getId());
+    public synchronized String listCasesForUser(String token) {
+        return gateway.myCases(token, 100, null, null);
     }
 
-    public synchronized boolean addImages(CaseItem c, List<String> newPaths) {
-        if (c == null || newPaths == null || newPaths.isEmpty()) return false;
-        c.addImagePaths(newPaths);
-        // Optionally re-run analysis to include the new images
-        analyzeCase(c);
-        return true;
+    public synchronized String listLastCasesForUser(String token, int n) {
+        if (n <= 0) return "";
+        return gateway.myCases(token, n, null, null);
+    }
+
+    public synchronized String listCasesForUserBetween(String token, LocalDateTime start, LocalDateTime end) {
+        if (start == null || end == null) return "";
+        return gateway.myCases(token, 100, start.toLocalDate(), end.toLocalDate());
+    }
+
+    public synchronized String analyzeCase(String token, String caseName) {
+        if (token == null || caseName == null) return "Invalid parameters";
+        return gateway.analyzeCase(token, caseName);
+    }
+
+    public synchronized boolean deleteCase(String token, String caseName) {
+        if (token == null || caseName == null) return false;
+        boolean success = gateway.deleteCase(token, caseName);
+        if (success) {
+            // Remove from local cache
+            cachedCases.removeIf(c -> caseName.equals(c.getName()));
+        }
+        return success;
+    }
+
+    public synchronized boolean addImages(String token, Integer caseId, List<String> newPaths) {
+        if (token == null || caseId == null || newPaths == null || newPaths.isEmpty()) return false;
+        
+        List<FileDTO> files = newPaths.stream()
+                .map(FileDTO::new)
+                .collect(Collectors.toList());
+        
+        return gateway.addFiles(token, caseId, files);
+    }
+
+    public synchronized String getCaseResult(String token, String caseName) {
+        return gateway.getCaseResult(token, caseName);
+    }
+
+    public synchronized CaseItem getCachedCaseByName(String name) {
+        for (CaseItem c : cachedCases) {
+            if (name != null && name.equals(c.getName())) {
+                return c;
+            }
+        }
+        return null;
+    }
+
+    public synchronized void clearCache() {
+        cachedCases.clear();
     }
 }

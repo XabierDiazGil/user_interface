@@ -2,6 +2,7 @@ package es.deusto.sd.user_interface;
 
 import es.deusto.sd.user_interface.entity.CaseItem;
 import es.deusto.sd.user_interface.entity.UserItem;
+import es.deusto.sd.user_interface.gateway.AuthenticusGateway;
 import es.deusto.sd.user_interface.service.CaseService;
 import es.deusto.sd.user_interface.service.UserService;
 
@@ -11,25 +12,25 @@ import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.io.File;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 public class SwingApp {
-    private final UserService userManager = new UserService();
-    private final CaseService caseManager = new CaseService();
+    // Gateway and services
+    private final AuthenticusGateway gateway = new AuthenticusGateway();
+    private final UserService userManager = new UserService(gateway);
+    private final CaseService caseManager = new CaseService(gateway);
 
     private JFrame frame;
     private JLabel userStatus;
-    private DefaultListModel<CaseItem> casesListModel = new DefaultListModel<>();
+    private JTextArea casesTextArea;
 
     public static void main(String[] args) {
         EventQueue.invokeLater(() -> new SwingApp().createAndShowGui());
     }
 
     private void createAndShowGui() {
-        frame = new JFrame("Sample Swing Interface - User & Case Management");
+        frame = new JFrame("Authenticus - User & Case Management");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.setSize(900, 600);
 
@@ -86,7 +87,7 @@ public class SwingApp {
             String pw = new String(suPassword.getPassword());
             String phone = suPhone.getText().trim();
             boolean ok = userManager.signUp(name, email, pw, phone);
-            JOptionPane.showMessageDialog(frame, ok ? "User signed up" : "Sign up failed (email exists or invalid)");
+            JOptionPane.showMessageDialog(frame, ok ? "User signed up successfully" : "Sign up failed (check credentials or server connection)");
         });
 
         btnLogin.addActionListener((ActionEvent e) -> {
@@ -94,16 +95,17 @@ public class SwingApp {
             String pw = new String(liPassword.getPassword());
             boolean ok = userManager.login(email, pw);
             if (ok) {
-                userStatus.setText("Logged in: " + userManager.getCurrentUser().getEmail());
+                userStatus.setText("Logged in: " + email);
                 refreshCasesList();
             }
-            JOptionPane.showMessageDialog(frame, ok ? "Login successful" : "Login failed");
+            JOptionPane.showMessageDialog(frame, ok ? "Login successful" : "Login failed (check credentials or server connection)");
         });
 
         btnLogout.addActionListener((ActionEvent e) -> {
             userManager.logout();
             userStatus.setText("No user logged in");
-            casesListModel.clear();
+            if (casesTextArea != null) casesTextArea.setText("");
+            caseManager.clearCache();
             JOptionPane.showMessageDialog(frame, "Logged out");
         });
 
@@ -111,9 +113,10 @@ public class SwingApp {
             boolean ok = userManager.removeCurrentUser();
             if (ok) {
                 userStatus.setText("No user logged in");
-                casesListModel.clear();
+                if (casesTextArea != null) casesTextArea.setText("");
+                caseManager.clearCache();
             }
-            JOptionPane.showMessageDialog(frame, ok ? "Account removed" : "No user logged in");
+            JOptionPane.showMessageDialog(frame, ok ? "Account removed" : "Failed to remove account (no user logged in or server error)");
         });
 
         p.add(top, BorderLayout.NORTH);
@@ -136,7 +139,7 @@ public class SwingApp {
         createPanel.add(btnChoose);
         createPanel.add(new JScrollPane(imagesList));
 
-        String[] analysisTypes = new String[]{"Type A", "Type B", "Type C"};
+        String[] analysisTypes = new String[]{"Veracidad", "Integridad"};
         JComboBox<String> analysisCombo = new JComboBox<>(analysisTypes);
         createPanel.add(new JLabel("Analysis type:")); createPanel.add(analysisCombo);
         JButton btnCreateCase = new JButton("Create Case");
@@ -156,21 +159,39 @@ public class SwingApp {
 
         btnCreateCase.addActionListener((ActionEvent e) -> {
             UserItem u = userManager.getCurrentUser();
-            if (u == null) { JOptionPane.showMessageDialog(frame, "Please log in first"); return; }
+            String token = userManager.getCurrentToken();
+            if (u == null || token == null) { 
+                JOptionPane.showMessageDialog(frame, "Please log in first"); 
+                return; 
+            }
             String name = caseName.getText().trim();
+            if (name.isEmpty()) {
+                JOptionPane.showMessageDialog(frame, "Please enter a case name");
+                return;
+            }
             List<String> imgs = new ArrayList<>();
-            for (int i=0;i<imagesModel.size();i++) imgs.add(imagesModel.get(i));
+            for (int i=0; i<imagesModel.size(); i++) imgs.add(imagesModel.get(i));
             String analysis = (String)analysisCombo.getSelectedItem();
             LocalDateTime createdAt = LocalDateTime.now();
-            CaseItem c = caseManager.createCase(u.getEmail(), name, imgs, analysis, createdAt);
-            caseManager.analyzeCase(c);
-            JOptionPane.showMessageDialog(frame, "Case created and analyzed");
+            
+            CaseItem c = caseManager.createCase(token, u.getEmail(), name, imgs, analysis, createdAt);
+            if (c != null) {
+                // Auto-analyze the case
+                String analyzeResult = caseManager.analyzeCase(token, name);
+                JOptionPane.showMessageDialog(frame, "Case created and analyzed:\n" + analyzeResult);
+                refreshCasesList();
+            } else {
+                JOptionPane.showMessageDialog(frame, "Failed to create case (check server connection)");
+            }
         });
 
+        // Cases display panel
         JPanel listPanel = new JPanel(new BorderLayout());
         listPanel.add(new JLabel("User Cases:"), BorderLayout.NORTH);
-        JList<CaseItem> casesList = new JList<>(casesListModel);
-        listPanel.add(new JScrollPane(casesList), BorderLayout.CENTER);
+        
+        casesTextArea = new JTextArea();
+        casesTextArea.setEditable(false);
+        listPanel.add(new JScrollPane(casesTextArea), BorderLayout.CENTER);
         
         // Controls for listing (last N or date range)
         JPanel listControls = new JPanel(new FlowLayout(FlowLayout.LEFT));
@@ -184,47 +205,105 @@ public class SwingApp {
         JButton btnListByDateRange = new JButton("List By Date Range");
         listControls.add(lblLastN); listControls.add(txtLastN); listControls.add(btnListLastN);
         listControls.add(new JSeparator(SwingConstants.VERTICAL));
-        listControls.add(lblStart); listControls.add(txtStart); listControls.add(lblEnd); listControls.add(txtEnd); listControls.add(btnListByDateRange);
-        listPanel.add(listControls, BorderLayout.NORTH);
-        JPanel listButtons = new JPanel();
+        listControls.add(lblStart); listControls.add(txtStart); 
+        listControls.add(lblEnd); listControls.add(txtEnd); 
+        listControls.add(btnListByDateRange);
+        
+        // Case action buttons
+        JPanel actionPanel = new JPanel(new FlowLayout());
+        JTextField caseNameField = new JTextField(15);
         JButton btnShowResult = new JButton("Show Result");
         JButton btnDeleteCase = new JButton("Delete Case");
-        JButton btnAddImagesToCase = new JButton("Add Images");
-        listButtons.add(btnShowResult); listButtons.add(btnDeleteCase); listButtons.add(btnAddImagesToCase);
-        listPanel.add(listButtons, BorderLayout.SOUTH);
+        JButton btnAnalyze = new JButton("Analyze");
+        actionPanel.add(new JLabel("Case name:"));
+        actionPanel.add(caseNameField);
+        actionPanel.add(btnShowResult);
+        actionPanel.add(btnDeleteCase);
+        actionPanel.add(btnAnalyze);
 
-        btnShowResult.addActionListener((ActionEvent e) -> {
-            CaseItem sel = casesList.getSelectedValue();
-            if (sel == null) { JOptionPane.showMessageDialog(frame, "Select a case"); return; }
-            StringBuilder sb = new StringBuilder();
-            sb.append("Case: ").append(sel.getName()).append("\n");
-            LocalDateTime dt = sel.getCreatedAt();
-            String fmt = dt == null ? "n/a" : dt.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-            sb.append("Created: ").append(fmt).append("\n");
-            sb.append("Analysis: ").append(sel.getAnalysisType()).append("\n");
-            sb.append("Images: \n");
-            for (String pth: sel.getImagePaths()) sb.append(" - ").append(pth).append("\n");
-            sb.append("\nResult (per image):\n");
-            Map<String, Double> scores = sel.getImageScores();
-            for (String imgPath : sel.getImagePaths()) {
-                Double s = scores.get(imgPath);
-                String sStr = (s == null || s.isNaN()) ? "n/a" : String.format("%.3f", s);
-                sb.append(" - ").append(imgPath).append(" -> ").append(sStr).append("\n");
+        JPanel bottomPanel = new JPanel(new BorderLayout());
+        bottomPanel.add(listControls, BorderLayout.NORTH);
+        bottomPanel.add(actionPanel, BorderLayout.SOUTH);
+        listPanel.add(bottomPanel, BorderLayout.SOUTH);
+
+        btnListLastN.addActionListener((ActionEvent e) -> {
+            String token = userManager.getCurrentToken();
+            if (token == null) { 
+                JOptionPane.showMessageDialog(frame, "Please log in first"); 
+                return; 
             }
-            // Average score removed; per-image scores are shown above.
-            JTextArea ta = new JTextArea(sb.toString());
-            ta.setEditable(false);
-            JOptionPane.showMessageDialog(frame, new JScrollPane(ta), "Case Result", JOptionPane.INFORMATION_MESSAGE);
+            String s = txtLastN.getText().trim();
+            int n = 5;
+            try { n = Integer.parseInt(s); } catch (Exception ex) { 
+                JOptionPane.showMessageDialog(frame, "Invalid number: " + s); 
+                return; 
+            }
+            String result = caseManager.listLastCasesForUser(token, n);
+            casesTextArea.setText(result);
         });
 
-        // Refresh button removed; list auto-updates on relevant actions
+        btnListByDateRange.addActionListener((ActionEvent e) -> {
+            String token = userManager.getCurrentToken();
+            if (token == null) { 
+                JOptionPane.showMessageDialog(frame, "Please log in first"); 
+                return; 
+            }
+            String sStart = txtStart.getText().trim();
+            String sEnd = txtEnd.getText().trim();
+            if (sStart.isEmpty() || sEnd.isEmpty()) { 
+                JOptionPane.showMessageDialog(frame, "Start and End dates are required"); 
+                return; 
+            }
+            java.time.LocalDate startDate;
+            java.time.LocalDate endDate;
+            try {
+                startDate = java.time.LocalDate.parse(sStart);
+                endDate = java.time.LocalDate.parse(sEnd);
+            } catch (Exception ex) { 
+                JOptionPane.showMessageDialog(frame, "Invalid date format. Use yyyy-MM-dd"); 
+                return; 
+            }
+            java.time.LocalDateTime start = startDate.atStartOfDay();
+            java.time.LocalDateTime end = endDate.atTime(23,59,59);
+            String result = caseManager.listCasesForUserBetween(token, start, end);
+            casesTextArea.setText(result);
+        });
+
+        btnShowResult.addActionListener((ActionEvent e) -> {
+            String token = userManager.getCurrentToken();
+            String cName = caseNameField.getText().trim();
+            if (token == null) { 
+                JOptionPane.showMessageDialog(frame, "Please log in first"); 
+                return; 
+            }
+            if (cName.isEmpty()) {
+                JOptionPane.showMessageDialog(frame, "Enter case name");
+                return;
+            }
+            String result = caseManager.getCaseResult(token, cName);
+            if (result.isEmpty()) {
+                JOptionPane.showMessageDialog(frame, "Case not found or no results");
+            } else {
+                JTextArea ta = new JTextArea(result);
+                ta.setEditable(false);
+                JOptionPane.showMessageDialog(frame, new JScrollPane(ta), "Case Result", JOptionPane.INFORMATION_MESSAGE);
+            }
+        });
 
         btnDeleteCase.addActionListener((ActionEvent e) -> {
-            CaseItem sel = casesList.getSelectedValue();
-            if (sel == null) { JOptionPane.showMessageDialog(frame, "Select a case first"); return; }
-            int option = JOptionPane.showConfirmDialog(frame, "Delete case '" + sel.getName() + "'?", "Confirm delete", JOptionPane.YES_NO_OPTION);
+            String token = userManager.getCurrentToken();
+            String cName = caseNameField.getText().trim();
+            if (token == null) { 
+                JOptionPane.showMessageDialog(frame, "Please log in first"); 
+                return; 
+            }
+            if (cName.isEmpty()) {
+                JOptionPane.showMessageDialog(frame, "Enter case name");
+                return;
+            }
+            int option = JOptionPane.showConfirmDialog(frame, "Delete case '" + cName + "'?", "Confirm delete", JOptionPane.YES_NO_OPTION);
             if (option != JOptionPane.YES_OPTION) return;
-            boolean ok = caseManager.deleteCase(sel);
+            boolean ok = caseManager.deleteCase(token, cName);
             if (ok) {
                 JOptionPane.showMessageDialog(frame, "Case deleted");
                 refreshCasesList();
@@ -233,57 +312,20 @@ public class SwingApp {
             }
         });
 
-        btnAddImagesToCase.addActionListener((ActionEvent e) -> {
-            CaseItem sel = casesList.getSelectedValue();
-            if (sel == null) { JOptionPane.showMessageDialog(frame, "Select a case first"); return; }
-            JFileChooser fc = new JFileChooser();
-            fc.setMultiSelectionEnabled(true);
-            fc.setFileFilter(new FileNameExtensionFilter("Images", "jpg", "png", "jpeg", "bmp"));
-            int ret = fc.showOpenDialog(frame);
-            if (ret != JFileChooser.APPROVE_OPTION) return;
-            File[] files = fc.getSelectedFiles();
-            if (files == null || files.length == 0) return;
-            List<String> newPaths = new ArrayList<>();
-            for (File f : files) newPaths.add(f.getAbsolutePath());
-            int opt = JOptionPane.showConfirmDialog(frame, "Add " + newPaths.size() + " images to case '" + sel.getName() + "'?", "Confirm add", JOptionPane.YES_NO_OPTION);
-            if (opt != JOptionPane.YES_OPTION) return;
-            boolean ok = caseManager.addImages(sel, newPaths);
-            if (ok) {
-                JOptionPane.showMessageDialog(frame, "Images added and case re-analyzed");
-                refreshCasesList();
-            } else {
-                JOptionPane.showMessageDialog(frame, "Failed to add images");
+        btnAnalyze.addActionListener((ActionEvent e) -> {
+            String token = userManager.getCurrentToken();
+            String cName = caseNameField.getText().trim();
+            if (token == null) { 
+                JOptionPane.showMessageDialog(frame, "Please log in first"); 
+                return; 
             }
-        });
-
-        btnListLastN.addActionListener((ActionEvent e) -> {
-            UserItem u = userManager.getCurrentUser();
-            if (u == null) { JOptionPane.showMessageDialog(frame, "Please log in first"); return; }
-            String s = txtLastN.getText().trim();
-            int n = 5;
-            try { n = Integer.parseInt(s); } catch (Exception ex) { JOptionPane.showMessageDialog(frame, "Invalid number: " + s); return; }
-            casesListModel.clear();
-            List<CaseItem> res = caseManager.listLastCasesForUser(u.getEmail(), n);
-            for (CaseItem c : res) casesListModel.addElement(c);
-        });
-
-        btnListByDateRange.addActionListener((ActionEvent e) -> {
-            UserItem u = userManager.getCurrentUser();
-            if (u == null) { JOptionPane.showMessageDialog(frame, "Please log in first"); return; }
-            String sStart = txtStart.getText().trim();
-            String sEnd = txtEnd.getText().trim();
-            if (sStart.isEmpty() || sEnd.isEmpty()) { JOptionPane.showMessageDialog(frame, "Start and End dates are required"); return; }
-            java.time.LocalDate startDate;
-            java.time.LocalDate endDate;
-            try {
-                startDate = java.time.LocalDate.parse(sStart);
-                endDate = java.time.LocalDate.parse(sEnd);
-            } catch (Exception ex) { JOptionPane.showMessageDialog(frame, "Invalid date format. Use yyyy-MM-dd"); return; }
-            java.time.LocalDateTime start = startDate.atStartOfDay();
-            java.time.LocalDateTime end = endDate.atTime(23,59,59);
-            List<CaseItem> res = caseManager.listCasesForUserBetween(u.getEmail(), start, end);
-            casesListModel.clear();
-            for (CaseItem c : res) casesListModel.addElement(c);
+            if (cName.isEmpty()) {
+                JOptionPane.showMessageDialog(frame, "Enter case name");
+                return;
+            }
+            String result = caseManager.analyzeCase(token, cName);
+            JOptionPane.showMessageDialog(frame, result);
+            refreshCasesList();
         });
 
         p.add(createPanel, BorderLayout.NORTH);
@@ -292,10 +334,11 @@ public class SwingApp {
     }
 
     private void refreshCasesList() {
-        casesListModel.clear();
-        UserItem u = userManager.getCurrentUser();
-        if (u == null) return;
-        List<CaseItem> cs = caseManager.listLastCasesForUser(u.getEmail(), 5); // default last 5
-        for (CaseItem c: cs) casesListModel.addElement(c);
+        String token = userManager.getCurrentToken();
+        if (token == null) return;
+        String result = caseManager.listLastCasesForUser(token, 5);
+        if (casesTextArea != null) {
+            casesTextArea.setText(result);
+        }
     }
 }

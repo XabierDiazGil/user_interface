@@ -9,6 +9,7 @@ public class CaseItem {
     private static final AtomicInteger ID_GEN = new AtomicInteger(1);
 
     private final int id;
+    private Integer serverId; // Server-assigned ID
     private final String userEmail;
     private final String name;
     private final List<String> imagePaths;
@@ -19,6 +20,7 @@ public class CaseItem {
 
     public CaseItem(String userEmail, String name, List<String> imagePaths, String analysisType, LocalDateTime createdAt) {
         this.id = ID_GEN.getAndIncrement();
+        this.serverId = null;
         this.userEmail = userEmail;
         this.name = name;
         this.imagePaths = imagePaths == null ? new ArrayList<>() : new ArrayList<>(imagePaths);
@@ -31,6 +33,8 @@ public class CaseItem {
     }
 
     public int getId() { return id; }
+    public Integer getServerId() { return serverId; }
+    public void setServerId(Integer serverId) { this.serverId = serverId; }
     public String getUserEmail() { return userEmail; }
     public String getName() { return name; }
     public List<String> getImagePaths() { return java.util.Collections.unmodifiableList(imagePaths); }
